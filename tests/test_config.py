@@ -84,6 +84,35 @@ class TestConfigParsing:
 
             assert config_module.config.codex.enable_search is True
 
+    def test_codex_sandbox_default(self):
+        """Should default CODEX_SANDBOX to workspace-write (what --full-auto used)."""
+        env = os.environ.copy()
+        env.pop("CODEX_SANDBOX", None)
+        with patch.dict(os.environ, env, clear=True):
+            import importlib
+            from owlex import config as config_module
+            importlib.reload(config_module)
+
+            assert config_module.config.codex.sandbox == "workspace-write"
+
+    def test_codex_sandbox_read_only(self):
+        """Should accept CODEX_SANDBOX=read-only."""
+        with patch.dict(os.environ, {"CODEX_SANDBOX": "read-only"}):
+            import importlib
+            from owlex import config as config_module
+            importlib.reload(config_module)
+
+            assert config_module.config.codex.sandbox == "read-only"
+
+    def test_codex_sandbox_invalid_falls_back(self):
+        """Should fall back to workspace-write for an unknown sandbox mode."""
+        with patch.dict(os.environ, {"CODEX_SANDBOX": "yolo"}):
+            import importlib
+            from owlex import config as config_module
+            importlib.reload(config_module)
+
+            assert config_module.config.codex.sandbox == "workspace-write"
+
     def test_gemini_yolo_mode_default(self):
         """Should default to False for GEMINI_YOLO_MODE."""
         env = os.environ.copy()

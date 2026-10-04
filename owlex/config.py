@@ -14,6 +14,7 @@ class CodexConfig:
     bypass_approvals: bool = False
     clean_output: bool = True
     enable_search: bool = True
+    sandbox: str = "workspace-write"  # read-only | workspace-write | danger-full-access
 
 
 @dataclass(frozen=True)
@@ -81,10 +82,16 @@ class OwlexConfig:
 
 def load_config() -> OwlexConfig:
     """Load configuration from environment variables."""
+    codex_sandbox = os.environ.get("CODEX_SANDBOX", "workspace-write").strip() or "workspace-write"
+    if codex_sandbox not in ("read-only", "workspace-write", "danger-full-access"):
+        print(f"[WARNING] Invalid CODEX_SANDBOX value '{codex_sandbox}', using default workspace-write", file=sys.stderr)
+        codex_sandbox = "workspace-write"
+
     codex = CodexConfig(
         bypass_approvals=os.environ.get("CODEX_BYPASS_APPROVALS", "false").lower() == "true",
         clean_output=os.environ.get("CODEX_CLEAN_OUTPUT", "true").lower() == "true",
         enable_search=os.environ.get("CODEX_ENABLE_SEARCH", "true").lower() == "true",
+        sandbox=codex_sandbox,
     )
 
     gemini = GeminiConfig(

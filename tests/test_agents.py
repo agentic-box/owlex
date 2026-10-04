@@ -22,13 +22,18 @@ class TestCodexRunner:
         """Should build basic exec command."""
         with patch("owlex.agents.codex.config") as mock_config:
             mock_config.codex.bypass_approvals = False
+            mock_config.codex.sandbox = "workspace-write"
 
             cmd = runner.build_exec_command(prompt="Hello")
 
             assert cmd.command[0] == "codex"
             assert cmd.command[1] == "exec"
             assert "--skip-git-repo-check" in cmd.command
-            assert "--full-auto" in cmd.command
+            assert "--full-auto" not in cmd.command  # removed from codex exec
+            idx = cmd.command.index("--sandbox")
+            assert cmd.command[idx + 1] == "workspace-write"
+            idx = cmd.command.index("-c")
+            assert cmd.command[idx + 1] == 'approval_policy="never"'
             assert "-" in cmd.command  # stdin marker
             assert cmd.prompt == "Hello"
             assert cmd.output_prefix == "Codex Output"
@@ -83,6 +88,31 @@ class TestCodexRunner:
 
             assert "--dangerously-bypass-approvals-and-sandbox" in cmd.command
             assert "--full-auto" not in cmd.command
+            assert "--sandbox" not in cmd.command
+
+    def test_exec_sandbox_from_config(self, runner):
+        """Should pass the configured sandbox mode through."""
+        with patch("owlex.agents.codex.config") as mock_config:
+            mock_config.codex.bypass_approvals = False
+            mock_config.codex.sandbox = "read-only"
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            idx = cmd.command.index("--sandbox")
+            assert cmd.command[idx + 1] == "read-only"
+
+    def test_resume_sandbox_flags_before_subcommand(self, runner):
+        """Resume should use --sandbox/-c, placed before the resume subcommand."""
+        with patch("owlex.agents.codex.config") as mock_config:
+            mock_config.codex.bypass_approvals = False
+            mock_config.codex.sandbox = "workspace-write"
+
+            cmd = runner.build_resume_command(session_ref="abc123", prompt="Continue")
+
+            assert "--full-auto" not in cmd.command
+            assert cmd.command.index("--sandbox") < cmd.command.index("resume")
+            assert cmd.command.index("-c") < cmd.command.index("resume")
+            assert cmd.command[cmd.command.index("-c") + 1] == 'approval_policy="never"'
 
     def test_resume_basic_command(self, runner):
         """Should build basic resume command."""

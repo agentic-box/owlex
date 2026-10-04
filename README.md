@@ -145,6 +145,7 @@ Council runs in the background. Start a query, keep working, check results later
 | `COUNCIL_CLAUDE_OPINION` | `false` | Claude shares its opinion with agents by default |
 | `OWLEX_DEFAULT_TIMEOUT` | `300` | Timeout in seconds |
 | `CODEX_BYPASS_APPROVALS` | `false` | Bypass sandbox (use with caution) |
+| `CODEX_SANDBOX` | `workspace-write` | Codex sandbox: `read-only`, `workspace-write`, or `danger-full-access` |
 | `GEMINI_YOLO_MODE` | `false` | Auto-approve Gemini actions |
 | `OPENCODE_AGENT` | `plan` | `plan` (read-only) or `build` |
 | `OPENROUTER_API_KEY` | `` | OpenRouter API key (enables ClaudeOR agent) |

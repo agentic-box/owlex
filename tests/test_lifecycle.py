@@ -4,10 +4,12 @@ Tests run_command, timeout handling, and task cancellation.
 """
 
 import asyncio
+import os
 import sys
+from unittest.mock import patch
 
 import pytest
-from owlex.engine import TaskEngine
+from owlex.engine import TaskEngine, resolve_executable
 from owlex.models import TaskStatus
 
 
@@ -78,6 +80,43 @@ class TestTaskExecution:
         assert task.status == TaskStatus.FAILED.value
         assert "not found" in task.error.lower()
         assert "Install the command first" in task.error
+
+
+class TestResolveExecutable:
+    """Tests for argv[0] resolution (Windows .cmd shims)."""
+
+    def test_resolves_name_via_which(self):
+        """Should replace argv[0] with the path shutil.which finds."""
+        with patch("owlex.engine.shutil.which", return_value="/npm/codex.CMD"):
+            assert resolve_executable(["codex", "exec", "-"]) == ["/npm/codex.CMD", "exec", "-"]
+
+    def test_unresolved_name_passes_through(self):
+        """Should leave an unknown name unchanged so the not-found hint still fires."""
+        with patch("owlex.engine.shutil.which", return_value=None):
+            assert resolve_executable(["missing", "--version"]) == ["missing", "--version"]
+
+    def test_empty_command(self):
+        """Should return an empty command unchanged."""
+        assert resolve_executable([]) == []
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="PATHEXT shims are Windows-only")
+    async def test_runs_cmd_shim_on_path(self, engine, tmp_path, monkeypatch):
+        """A CLI installed only as a .cmd shim (as npm does) should run by bare name."""
+        (tmp_path / "owlexshim.cmd").write_text("@echo shim ran\n")
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+        task = engine.create_task(command="test_shim", args={})
+        await engine.run_command(
+            task=task,
+            command=["owlexshim"],
+            prompt="",
+            output_cleaner=lambda x, p: x.strip(),
+            output_prefix="Test",
+            timeout=10,
+        )
+
+        assert task.status == TaskStatus.COMPLETED.value, task.error
+        assert "shim ran" in task.result
 
 
 class TestTimeoutHandling:

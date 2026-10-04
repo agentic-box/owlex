@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.session import ServerSession
 
 from .models import TaskResponse, ErrorCode, Agent
-from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner, claudeor_runner, aichat_runner
+from .engine import engine, resolve_executable, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner, claudeor_runner, aichat_runner
 from .council import Council
 from .config import config
 from .roles import get_resolver
@@ -31,7 +31,7 @@ async def _get_cli_version(cmd: str) -> str:
     """Get version string from a CLI tool."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            cmd, "--version",
+            *resolve_executable([cmd, "--version"]),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

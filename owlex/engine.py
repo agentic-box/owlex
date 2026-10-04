@@ -4,6 +4,7 @@ Handles subprocess management, streaming, and task lifecycle.
 """
 
 import asyncio
+import shutil
 import sys
 import uuid
 from collections.abc import Callable
@@ -14,6 +15,20 @@ from .config import config
 from .models import Task, TaskStatus, AgentResponse, Agent
 from .agents import CodexRunner, GeminiRunner, OpenCodeRunner, ClaudeORRunner, AiChatRunner
 from .agents.base import AgentRunner, AgentCommand
+
+
+def resolve_executable(command: list[str]) -> list[str]:
+    """Resolve argv[0] to a full path so Windows command shims can be spawned.
+
+    On Windows, CreateProcess only appends .exe, so an npm-installed CLI that
+    ships codex.cmd but no codex.exe fails with WinError 2 even though it is
+    on PATH. shutil.which honours PATHEXT. Unresolvable names are returned
+    unchanged so the FileNotFoundError handler still reports the install hint.
+    """
+    if not command:
+        return command
+    resolved = shutil.which(command[0])
+    return [resolved, *command[1:]] if resolved else command
 
 
 def extract_content(result: str | None, prefix: str) -> str:
@@ -279,7 +294,7 @@ class TaskEngine:
 
         import os as _os
 
-        command = agent_cmd.command
+        command = resolve_executable(agent_cmd.command)
         prompt = agent_cmd.prompt
         output_cleaner = lambda stdout, p: stdout  # Default no-op cleaner
         output_prefix = agent_cmd.output_prefix
@@ -413,7 +428,8 @@ class TaskEngine:
 
         except FileNotFoundError as e:
             cmd_name = command[0]
-            if e.filename == cmd_name:
+            # Windows reports a missing executable with filename=None
+            if e.filename == cmd_name or (e.filename is None and shutil.which(cmd_name) is None):
                 hint = not_found_hint or "Please ensure it is installed and in your PATH."
                 task.error = f"Error: '{cmd_name}' command not found. {hint}"
             else:

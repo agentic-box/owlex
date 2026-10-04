@@ -118,7 +118,9 @@ class CodexRunner(AgentRunner):
         if config.codex.bypass_approvals:
             full_command.append("--dangerously-bypass-approvals-and-sandbox")
         else:
-            full_command.append("--full-auto")
+            # Equivalent of the removed --full-auto flag: sandboxed, no approval prompts
+            full_command.extend(["--sandbox", config.codex.sandbox])
+            full_command.extend(["-c", 'approval_policy="never"'])
 
         # Use stdin for prompt input
         full_command.append("-")
@@ -150,7 +152,9 @@ class CodexRunner(AgentRunner):
         if config.codex.bypass_approvals:
             full_command.append("--dangerously-bypass-approvals-and-sandbox")
         else:
-            full_command.append("--full-auto")
+            # Equivalent of the removed --full-auto flag: sandboxed, no approval prompts
+            full_command.extend(["--sandbox", config.codex.sandbox])
+            full_command.extend(["-c", 'approval_policy="never"'])
 
         full_command.append("resume")
         if session_ref == "--last":
