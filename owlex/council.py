@@ -19,12 +19,18 @@ from .models import (
     CouncilResponse,
     CouncilRound,
     CouncilMetadata,
+    Task,
 )
 
 
 def _log(msg: str):
     """Log progress to stderr for CLI visibility."""
     print(msg, file=sys.stderr, flush=True)
+
+
+def _captured_output(task: Task) -> str:
+    """Raw stdout then stderr of a finished task, for session ID parsing."""
+    return "\n".join(part for part in (task.raw_output, task.warnings) if part)
 
 
 class Council:
@@ -410,8 +416,9 @@ class Council:
         round1_elapsed = (datetime.now() - round1_start).total_seconds()
         self.log(f"Round 1 complete ({round1_elapsed:.1f}s)")
 
-        # Capture session IDs from completed R1 agents for R2 resume
-        # Pass since_mtime (R1 start) and working_directory to scope session discovery
+        # Capture session IDs from completed R1 agents for R2 resume.
+        # Each runner gets its agent's captured output; codex and claudeor read
+        # the ID from it, the others use since_mtime and working_directory.
         # Subtract 1 second to handle filesystem mtime granularity (some filesystems
         # only store whole seconds, so a session created at 100.9s might have mtime 100)
         r1_start_mtime = round1_start.timestamp() - 1.0
@@ -421,7 +428,8 @@ class Council:
             if "codex" not in tasks or tasks["codex"].status != "completed":
                 return None
             session = await codex_runner.parse_session_id(
-                "", since_mtime=r1_start_mtime, working_directory=working_directory
+                _captured_output(tasks["codex"]),
+                since_mtime=r1_start_mtime, working_directory=working_directory,
             )
             if session and not codex_runner.validate_session_id(session):
                 self.log(f"Codex session ID validation failed: {session}")
@@ -434,7 +442,8 @@ class Council:
             if "gemini" not in tasks or tasks["gemini"].status != "completed":
                 return None
             session = await gemini_runner.parse_session_id(
-                "", since_mtime=r1_start_mtime, working_directory=working_directory
+                _captured_output(tasks["gemini"]),
+                since_mtime=r1_start_mtime, working_directory=working_directory,
             )
             if session and not gemini_runner.validate_session_id(session):
                 self.log(f"Gemini session ID validation failed: {session}")
@@ -447,7 +456,8 @@ class Council:
             if "opencode" not in tasks or tasks["opencode"].status != "completed":
                 return None
             session = await opencode_runner.parse_session_id(
-                "", since_mtime=r1_start_mtime, working_directory=working_directory
+                _captured_output(tasks["opencode"]),
+                since_mtime=r1_start_mtime, working_directory=working_directory,
             )
             if session and not opencode_runner.validate_session_id(session):
                 self.log(f"OpenCode session ID validation failed: {session}")
@@ -460,7 +470,8 @@ class Council:
             if "claudeor" not in tasks or tasks["claudeor"].status != "completed":
                 return None
             session = await claudeor_runner.parse_session_id(
-                "", since_mtime=r1_start_mtime, working_directory=working_directory
+                _captured_output(tasks["claudeor"]),
+                since_mtime=r1_start_mtime, working_directory=working_directory,
             )
             if session and not claudeor_runner.validate_session_id(session):
                 self.log(f"ClaudeOR session ID validation failed: {session}")
@@ -473,7 +484,8 @@ class Council:
             if "aichat" not in tasks or tasks["aichat"].status != "completed":
                 return None
             session = await aichat_runner.parse_session_id(
-                "", since_mtime=r1_start_mtime, working_directory=working_directory
+                _captured_output(tasks["aichat"]),
+                since_mtime=r1_start_mtime, working_directory=working_directory,
             )
             if session and not aichat_runner.validate_session_id(session):
                 self.log(f"AiChat session ID validation failed: {session}")

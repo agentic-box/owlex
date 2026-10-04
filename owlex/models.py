@@ -52,6 +52,7 @@ class Task:
     result: str | None = None
     error: str | None = None
     warnings: str | None = None  # stderr output captured even on success
+    raw_output: str | None = field(default=None, repr=False)  # stdout before cleaning, for session ID parsing
     async_task: asyncio.Task | None = field(default=None, repr=False)
     process: asyncio.subprocess.Process | None = field(default=None, repr=False)
     # Streaming support

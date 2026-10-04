@@ -3,105 +3,34 @@ Claude Code via OpenRouter agent runner.
 Uses Claude CLI with OpenRouter as the backend for alternative models.
 """
 
-import asyncio
-import hashlib
+import json
 import re
-from pathlib import Path
 from typing import Callable
 
 from ..config import config
 from .base import AgentRunner, AgentCommand
 
 
-async def get_latest_claude_session(
-    working_directory: str | None = None,
-    since_mtime: float | None = None,
-    max_retries: int = 3,
-    retry_delay: float = 0.3,
-) -> str | None:
-    """
-    Find the most recent Claude session ID from filesystem.
-
-    Claude stores sessions in ~/.claude/projects/<project-hash>/sessions/
-    or uses a project-specific structure.
-
-    Args:
-        working_directory: Working directory to scope session discovery.
-        since_mtime: Only consider files modified after this timestamp.
-        max_retries: Number of retries if no session found.
-        retry_delay: Delay between retries in seconds.
-
-    Returns:
-        Session ID if found, None otherwise
-    """
-    claude_dir = Path.home() / ".claude"
-    if not claude_dir.exists():
+def _parse_claude_json(raw_output: str) -> dict | None:
+    """Parse the JSON object `claude --output-format json` prints first."""
+    try:
+        data, _ = json.JSONDecoder().raw_decode((raw_output or "").lstrip())
+    except ValueError:
         return None
-
-    # Claude uses project hashes for session organization
-    projects_dir = claude_dir / "projects"
-    if not projects_dir.exists():
-        return None
-
-    for attempt in range(max_retries):
-        latest_file: Path | None = None
-        latest_mtime: float = 0
-
-        # If working directory provided, look for project-specific sessions
-        if working_directory:
-            # Claude hashes the project path
-            project_path = Path(working_directory).resolve()
-            # Try to find matching project directory
-            for project_dir in projects_dir.iterdir():
-                if not project_dir.is_dir():
-                    continue
-                # Look for session files in this project
-                for session_file in project_dir.glob("*.jsonl"):
-                    try:
-                        mtime = session_file.stat().st_mtime
-                        if since_mtime is not None and mtime < since_mtime:
-                            continue
-                        if mtime > latest_mtime:
-                            latest_mtime = mtime
-                            latest_file = session_file
-                    except OSError:
-                        continue
-        else:
-            # Search all project directories for recent sessions
-            try:
-                for project_dir in projects_dir.iterdir():
-                    if not project_dir.is_dir():
-                        continue
-                    for session_file in project_dir.glob("*.jsonl"):
-                        try:
-                            mtime = session_file.stat().st_mtime
-                            if since_mtime is not None and mtime < since_mtime:
-                                continue
-                            if mtime > latest_mtime:
-                                latest_mtime = mtime
-                                latest_file = session_file
-                        except OSError:
-                            continue
-            except OSError:
-                pass
-
-        if latest_file is not None:
-            # Return the session file stem as the session ID
-            return latest_file.stem
-
-        if attempt < max_retries - 1:
-            await asyncio.sleep(retry_delay)
-
-    return None
+    return data if isinstance(data, dict) else None
 
 
 def clean_claudeor_output(raw_output: str, original_prompt: str = "") -> str:
-    """Clean Claude OpenRouter output."""
+    """Extract the answer from Claude's JSON output and tidy it."""
+    data = _parse_claude_json(raw_output)
+    if data is not None and isinstance(data.get("result"), str):
+        text = data["result"]
+    else:
+        text = raw_output
     if not config.claudeor.clean_output:
-        return raw_output
-    cleaned = raw_output
+        return text
     # Remove excessive newlines
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    cleaned = re.sub(r'\n{3,}', '\n\n', text)
     return cleaned.strip()
 
 
@@ -152,6 +81,9 @@ class ClaudeORRunner(AgentRunner):
         """Build command for starting a new Claude OpenRouter session."""
         full_command = ["claude"]
 
+        # JSON output carries the session ID that round 2 resumes
+        full_command.extend(["--output-format", "json"])
+
         # Use print mode for single-shot execution
         full_command.extend(["--print", "-p", prompt])
 
@@ -188,6 +120,8 @@ class ClaudeORRunner(AgentRunner):
                 raise ValueError(f"Invalid session_ref: '{session_ref}' - cannot start with '-'")
             full_command.extend(["--resume", session_ref])
 
+        full_command.extend(["--output-format", "json"])
+
         # Use print mode
         full_command.extend(["--print", "-p", prompt])
 
@@ -213,11 +147,18 @@ class ClaudeORRunner(AgentRunner):
         working_directory: str | None = None,
     ) -> str | None:
         """
-        Get session ID for Claude.
+        Read the session ID from Claude's JSON output.
 
-        Claude stores sessions in project-specific directories.
+        Returns None when it is missing, so round 2 falls back to exec mode.
+        Picking the newest transcript under ~/.claude/projects would usually
+        select the live session of the Claude Code instance running the
+        council.
+
+        Args:
+            output: Captured stdout and stderr of the claude run
+            since_mtime: Ignored
+            working_directory: Ignored
         """
-        return await get_latest_claude_session(
-            working_directory=working_directory,
-            since_mtime=since_mtime,
-        )
+        data = _parse_claude_json(output)
+        session_id = data.get("session_id") if data else None
+        return session_id if isinstance(session_id, str) else None

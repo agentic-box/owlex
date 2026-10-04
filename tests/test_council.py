@@ -4,6 +4,7 @@ Tests for council orchestration logic with mocked engine.
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -191,6 +192,62 @@ class TestCouncilRound2:
         assert "Claude's expert analysis here" in round2_prompt
         assert response.claude_opinion is not None
         assert response.claude_opinion.content == "Claude's expert analysis here"
+
+
+class TestCouncilRound2SessionIds:
+    """Round 2 resumes only with session IDs read from round 1's own output."""
+
+    CODEX_ID = "01a108dd-412d-7d42-86df-fce173f73055"
+    CLAUDE_ID = "2cf8b2f3-0eb0-49ff-ade5-19d714991538"
+    GUESSES = {"--last", "latest", "continue", "--continue"}
+
+    async def _run_council(self, mock_engine, home: Path, r1_ids: bool):
+        """Run a council while unrelated sessions appear on disk during round 1.
+
+        The decoy files stand in for the user's own Codex conversation and the
+        live Claude Code transcript; neither may be resumed.
+        """
+        r2_calls = {}
+        now = datetime.now()
+        codex_day = home / ".codex" / "sessions" / f"{now.year}" / f"{now.month:02d}" / f"{now.day:02d}"
+        claude_project = home / ".claude" / "projects" / "D--user-project"
+
+        async def mock_run_agent(task, runner, mode="exec", session_ref=None, **kwargs):
+            if "_delib" in task.command:
+                r2_calls[runner.name] = (mode, session_ref)
+            elif runner.name == "codex":
+                codex_day.mkdir(parents=True, exist_ok=True)
+                (codex_day / "rollout-2026-10-04T12-00-00-deadbeef-0000-0000-0000-000000000000.jsonl").touch()
+                if r1_ids:
+                    task.raw_output = "answer\n"
+                    task.warnings = f"OpenAI Codex v0.159.1\nsession id: {self.CODEX_ID}\n"
+            elif runner.name == "claudeor":
+                claude_project.mkdir(parents=True, exist_ok=True)
+                (claude_project / "deadbeef-1111-1111-1111-111111111111.jsonl").touch()
+                if r1_ids:
+                    task.raw_output = f'{{"result": "answer", "session_id": "{self.CLAUDE_ID}"}}'
+            task.status = TaskStatus.COMPLETED.value
+            task.result = f"{runner.name} Output:\n\nanswer"
+            task.completion_time = datetime.now()
+
+        mock_engine.run_agent = mock_run_agent
+        with patch.object(Path, "home", return_value=home):
+            await Council().deliberate(prompt="Test question", deliberate=True, timeout=10)
+        return r2_calls
+
+    async def test_resumes_with_ids_from_round1_output(self, mock_engine, mock_config, tmp_path):
+        r2_calls = await self._run_council(mock_engine, tmp_path, r1_ids=True)
+
+        assert r2_calls["codex"] == ("resume", self.CODEX_ID)
+        assert r2_calls["claudeor"] == ("resume", self.CLAUDE_ID)
+        assert not {ref for _, ref in r2_calls.values()} & self.GUESSES
+
+    async def test_starts_fresh_without_ids(self, mock_engine, mock_config, tmp_path):
+        r2_calls = await self._run_council(mock_engine, tmp_path, r1_ids=False)
+
+        assert r2_calls["codex"] == ("exec", None)
+        assert r2_calls["claudeor"] == ("exec", None)
+        assert not {ref for _, ref in r2_calls.values()} & self.GUESSES
 
 
 class TestCouncilMetadata:

@@ -9,6 +9,7 @@ from owlex.agents.codex import CodexRunner
 from owlex.agents.gemini import GeminiRunner
 from owlex.agents.opencode import OpenCodeRunner
 from owlex.agents.aichat import AiChatRunner
+from owlex.agents.claudeor import ClaudeORRunner, clean_claudeor_output
 
 
 class TestCodexRunner:
@@ -637,3 +638,47 @@ class TestAgentInterface:
         runner = AiChatRunner()
         cleaner = runner.get_output_cleaner()
         assert callable(cleaner)
+
+
+class TestClaudeORRunner:
+    """Tests for ClaudeOR command construction and JSON output handling."""
+
+    @pytest.fixture
+    def runner(self):
+        return ClaudeORRunner()
+
+    def test_exec_requests_json_output(self, runner):
+        """Exec should ask for JSON so the session ID can be read."""
+        cmd = runner.build_exec_command(prompt="Hello")
+
+        idx = cmd.command.index("--output-format")
+        assert cmd.command[idx + 1] == "json"
+        assert cmd.command[-1] == "Hello"
+
+    def test_resume_by_id_requests_json_output(self, runner):
+        """Resume should pass the session ID and keep JSON output."""
+        cmd = runner.build_resume_command(session_ref="2cf8b2f3-0eb0-49ff-ade5-19d714991538", prompt="Again")
+
+        idx = cmd.command.index("--resume")
+        assert cmd.command[idx + 1] == "2cf8b2f3-0eb0-49ff-ade5-19d714991538"
+        assert cmd.command[cmd.command.index("--output-format") + 1] == "json"
+
+    def test_cleaner_extracts_result(self):
+        """The answer comes from the JSON result field."""
+        raw = '{"type":"result","result":"line one\\n\\n\\n\\nline two","session_id":"abc"}'
+        with patch("owlex.agents.claudeor.config") as mock_config:
+            mock_config.claudeor.clean_output = True
+            assert clean_claudeor_output(raw) == "line one\n\nline two"
+
+    def test_cleaner_extracts_result_without_cleaning(self):
+        """CLAUDEOR_CLEAN_OUTPUT=false must still not return raw JSON."""
+        raw = '{"type":"result","result":"answer\\n","session_id":"abc"}'
+        with patch("owlex.agents.claudeor.config") as mock_config:
+            mock_config.claudeor.clean_output = False
+            assert clean_claudeor_output(raw) == "answer\n"
+
+    def test_cleaner_passes_plain_text_through(self):
+        """Non-JSON output is cleaned as before."""
+        with patch("owlex.agents.claudeor.config") as mock_config:
+            mock_config.claudeor.clean_output = True
+            assert clean_claudeor_output("plain\n\n\n\nanswer\n") == "plain\n\nanswer"

@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-from owlex.agents.codex import CodexRunner, get_latest_codex_session
+from owlex.agents.codex import CodexRunner
+from owlex.agents.claudeor import ClaudeORRunner
 from owlex.agents.gemini import GeminiRunner, get_gemini_session_for_project, _find_gemini_project_dir
 from owlex.agents.opencode import OpenCodeRunner, get_latest_opencode_session, _get_opencode_project_id
 from owlex.agents.base import AgentRunner
@@ -369,41 +370,83 @@ class TestAsyncSessionParsing:
         assert result is None  # Base class returns None
 
 
-class TestCodexSessionDiscovery:
-    """Tests for Codex session file discovery."""
+class TestSessionIdFromOutput:
+    """Codex and ClaudeOR read the session ID from their own output, never the filesystem."""
 
-    @pytest.mark.asyncio
-    async def test_returns_none_when_no_sessions_dir(self):
-        """Should return None when ~/.codex/sessions doesn't exist."""
-        with patch.object(Path, 'exists', return_value=False):
-            result = await get_latest_codex_session()
-            assert result is None
+    # stderr header of codex-cli 0.159.1, followed by the answer on stdout
+    CODEX_OUTPUT = (
+        "pong\n"
+        "OpenAI Codex v0.159.1\n"
+        "--------\n"
+        "workdir: /tmp/project\n"
+        "model: gpt-6.1-sol\n"
+        "provider: openai\n"
+        "approval: never\n"
+        "sandbox: workspace-write\n"
+        "session id: 01a108dd-412d-7d42-86df-fce173f73055\n"
+        "--------\n"
+        "user\n"
+        "Reply with exactly: pong\n"
+    )
 
-    @pytest.mark.asyncio
-    async def test_respects_since_mtime_filter(self):
-        """Should ignore sessions older than since_mtime."""
-        import time
-        # Create a fake session directory structure
+    # `claude -p --output-format json` from Claude Code 2.1.289 (trimmed)
+    CLAUDE_OUTPUT = (
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"result":"ok","stop_reason":"end_turn",'
+        '"session_id":"2cf8b2f3-0eb0-49ff-ade5-19d714991538","total_cost_usd":0.14}'
+    )
+
+    async def test_codex_reads_session_id_line(self):
+        runner = CodexRunner()
+        assert await runner.parse_session_id(self.CODEX_OUTPUT) == "01a108dd-412d-7d42-86df-fce173f73055"
+
+    async def test_codex_handles_crlf(self):
+        runner = CodexRunner()
+        output = self.CODEX_OUTPUT.replace("\n", "\r\n")
+        assert await runner.parse_session_id(output) == "01a108dd-412d-7d42-86df-fce173f73055"
+
+    async def test_codex_returns_none_without_header(self):
+        runner = CodexRunner()
+        assert await runner.parse_session_id("pong\n") is None
+        assert await runner.parse_session_id("") is None
+
+    async def test_codex_ignores_session_files(self):
+        """A newer session file on disk must not be picked up."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Mock the codex sessions path
-            codex_dir = Path(tmpdir) / ".codex" / "sessions"
-            from datetime import datetime
-            now = datetime.now()
-            date_dir = codex_dir / f"{now.year}" / f"{now.month:02d}" / f"{now.day:02d}"
-            date_dir.mkdir(parents=True)
+            day = Path(tmpdir) / ".codex" / "sessions" / "2026" / "10" / "04"
+            day.mkdir(parents=True)
+            (day / "rollout-2026-10-04T12-00-00-11111111-2222-3333-4444-555555555555.jsonl").touch()
 
-            # Create an old session file
-            session_file = date_dir / "rollout-2025-01-01T12-00-00-abc123def456.jsonl"
-            session_file.touch()
+            runner = CodexRunner()
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
+                assert await runner.parse_session_id("pong\n", since_mtime=0) is None
 
-            # Set mtime to the past
-            old_mtime = time.time() - 3600  # 1 hour ago
-            os.utime(session_file, (old_mtime, old_mtime))
+    async def test_claudeor_reads_json_session_id(self):
+        runner = ClaudeORRunner()
+        assert await runner.parse_session_id(self.CLAUDE_OUTPUT) == "2cf8b2f3-0eb0-49ff-ade5-19d714991538"
 
-            # Search with since_mtime in the future
-            with patch.object(Path, 'home', return_value=Path(tmpdir)):
-                result = await get_latest_codex_session(since_mtime=time.time())
-                assert result is None  # Should be filtered out
+    async def test_claudeor_reads_json_followed_by_stderr(self):
+        """The council appends stderr after stdout."""
+        runner = ClaudeORRunner()
+        output = self.CLAUDE_OUTPUT + "\nsome warning on stderr"
+        assert await runner.parse_session_id(output) == "2cf8b2f3-0eb0-49ff-ade5-19d714991538"
+
+    async def test_claudeor_returns_none_for_text_or_empty(self):
+        runner = ClaudeORRunner()
+        assert await runner.parse_session_id("plain text answer") is None
+        assert await runner.parse_session_id("") is None
+        assert await runner.parse_session_id('{"result": "ok"}') is None
+
+    async def test_claudeor_ignores_transcripts(self):
+        """A newer transcript under ~/.claude/projects must not be picked up."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project = Path(tmpdir) / ".claude" / "projects" / "D--some-project"
+            project.mkdir(parents=True)
+            (project / "99999999-8888-7777-6666-555555555555.jsonl").touch()
+
+            runner = ClaudeORRunner()
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
+                assert await runner.parse_session_id("plain text", since_mtime=0) is None
 
 
 class TestGeminiSessionDiscovery:

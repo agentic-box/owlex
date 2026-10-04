@@ -379,6 +379,7 @@ class TaskEngine:
             task.stream_complete = True
 
             if process.returncode == 0:
+                task.raw_output = stdout_text
                 cleaned_output = output_cleaner(stdout_text, prompt)
                 task.result = f"{output_prefix}:\n\n{cleaned_output}"
                 # Capture stderr as warnings even on success (CLI tools often emit warnings)

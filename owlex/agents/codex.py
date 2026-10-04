@@ -2,84 +2,15 @@
 Codex CLI agent runner.
 """
 
-import asyncio
 import re
-from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Callable
 
 from ..config import config
 from .base import AgentRunner, AgentCommand
 
 
-async def get_latest_codex_session(
-    since_mtime: float | None = None,
-    max_retries: int = 3,
-    retry_delay: float = 0.3,
-) -> str | None:
-    """
-    Find the most recent Codex session ID from filesystem.
-
-    Codex stores sessions in ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
-    The UUID is extracted from the filename.
-
-    Args:
-        since_mtime: Only consider files modified after this timestamp.
-                     Used to scope to sessions created during current run.
-        max_retries: Number of retries if no session found (handles I/O lag).
-        retry_delay: Delay between retries in seconds.
-
-    Returns:
-        Session UUID if found, None otherwise
-    """
-    codex_dir = Path.home() / ".codex" / "sessions"
-    if not codex_dir.exists():
-        return None
-
-    for attempt in range(max_retries):
-        latest_file: Path | None = None
-        latest_mtime: float = 0
-
-        # Check recent date directories (today and yesterday)
-        # Use timedelta for correct month/year boundary handling
-        now = datetime.now()
-        yesterday = now - timedelta(days=1)
-        date_dirs = [
-            codex_dir / f"{now.year}" / f"{now.month:02d}" / f"{now.day:02d}",
-            codex_dir / f"{yesterday.year}" / f"{yesterday.month:02d}" / f"{yesterday.day:02d}",
-        ]
-
-        for date_dir in date_dirs:
-            if not date_dir.exists():
-                continue
-            try:
-                for session_file in date_dir.glob("rollout-*.jsonl"):
-                    try:
-                        mtime = session_file.stat().st_mtime
-                        # Skip files older than since_mtime if specified
-                        if since_mtime is not None and mtime < since_mtime:
-                            continue
-                        if mtime > latest_mtime:
-                            latest_mtime = mtime
-                            latest_file = session_file
-                    except OSError:
-                        continue  # File may have been deleted
-            except OSError:
-                continue  # Directory access error
-
-        if latest_file is not None:
-            # Extract UUID from filename
-            filename = latest_file.stem
-            match = re.search(r'rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([a-f0-9-]+)$', filename)
-            if match:
-                return match.group(1)
-
-        # Retry with delay if no session found (I/O lag)
-        # Uses asyncio.sleep to avoid blocking the event loop
-        if attempt < max_retries - 1:
-            await asyncio.sleep(retry_delay)
-
-    return None
+# codex exec prints a header to stderr that includes "session id: <uuid>"
+SESSION_ID_RE = re.compile(r"^session id:\s*([0-9a-fA-F-]{36})\s*$", re.MULTILINE)
 
 
 def clean_codex_output(raw_output: str, original_prompt: str = "") -> str:
@@ -183,17 +114,16 @@ class CodexRunner(AgentRunner):
         working_directory: str | None = None,
     ) -> str | None:
         """
-        Get session ID for Codex.
+        Read the session ID from the "session id:" line codex exec prints.
 
-        Codex doesn't output session ID in stdout, so we check the filesystem
-        for the most recently created session file.
-
-        Note: Codex sessions are stored globally (not project-scoped), so
-        working_directory is ignored. Session scoping relies on since_mtime.
+        Returns None when the line is missing, so round 2 falls back to exec
+        mode. Codex keeps every session in one shared folder, so picking the
+        newest file could select the user's own Codex conversation.
 
         Args:
-            output: Ignored (Codex doesn't output session IDs)
-            since_mtime: Only consider sessions created after this timestamp
-            working_directory: Ignored (Codex sessions are global)
+            output: Captured stdout and stderr of the codex run
+            since_mtime: Ignored
+            working_directory: Ignored
         """
-        return await get_latest_codex_session(since_mtime=since_mtime)
+        match = SESSION_ID_RE.search(output or "")
+        return match.group(1) if match else None
